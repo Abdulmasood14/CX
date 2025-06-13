@@ -444,9 +444,7 @@
             }
         }
 
-        // Form submission
-        // Replace the form submission part in your index.html with this debug version:
-
+        // Form submission with better error handling
         document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -467,6 +465,8 @@
             loading.style.display = 'block';
             
             try {
+                console.log('Sending request to /upload...');
+                
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
@@ -475,24 +475,30 @@
                 console.log('Response status:', response.status);
                 console.log('Response headers:', response.headers);
                 
-                // Get the raw text first to see what we're actually receiving
+                // Check if response is ok
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                }
+                
+                // Get response text first
                 const responseText = await response.text();
-                console.log('Raw response:', responseText);
+                console.log('Response text:', responseText);
                 
                 // Check if response is empty
                 if (!responseText || responseText.trim() === '') {
-                    throw new Error('Server returned empty response');
+                    throw new Error('Server returned empty response. Please check server logs.');
                 }
                 
-                // Try to parse as JSON
+                // Try to parse JSON
                 let data;
                 try {
                     data = JSON.parse(responseText);
                 } catch (parseError) {
                     console.error('JSON parse error:', parseError);
-                    console.error('Response text:', responseText);
-                    throw new Error(`Invalid JSON response: ${responseText.substring(0, 100)}...`);
+                    throw new Error(`Invalid server response: ${responseText.substring(0, 200)}...`);
                 }
+                
+                console.log('Parsed data:', data);
                 
                 if (data.success) {
                     currentExtractionId = data.extraction_id;
