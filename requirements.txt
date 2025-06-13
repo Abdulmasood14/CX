@@ -1,0 +1,7 @@
+Flask
+google-generativeai
+pandas
+PyMuPDF
+Pillow
+Werkzeug
+pdf2image
