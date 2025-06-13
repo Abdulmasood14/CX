@@ -445,6 +445,8 @@
         }
 
         // Form submission
+        // Replace the form submission part in your index.html with this debug version:
+
         document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -470,7 +472,27 @@
                     body: formData
                 });
                 
-                const data = await response.json();
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                
+                // Get the raw text first to see what we're actually receiving
+                const responseText = await response.text();
+                console.log('Raw response:', responseText);
+                
+                // Check if response is empty
+                if (!responseText || responseText.trim() === '') {
+                    throw new Error('Server returned empty response');
+                }
+                
+                // Try to parse as JSON
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error('JSON parse error:', parseError);
+                    console.error('Response text:', responseText);
+                    throw new Error(`Invalid JSON response: ${responseText.substring(0, 100)}...`);
+                }
                 
                 if (data.success) {
                     currentExtractionId = data.extraction_id;
@@ -481,6 +503,7 @@
                     throw new Error(data.error || 'Unknown error occurred');
                 }
             } catch (err) {
+                console.error('Full error:', err);
                 error.innerHTML = `❌ Error: ${err.message}`;
                 error.style.display = 'block';
             } finally {
