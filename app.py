@@ -1,338 +1,317 @@
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify
 import os
-import json
-import zipfile
-from werkzeug.utils import secure_filename
-from pathlib import Path
 import tempfile
-import shutil
-from datetime import datetime
 import uuid
-import traceback
-import sys
+from datetime import datetime
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['SECRET_KEY'] = 'your-secret-key-here'
 
-# Create upload directory if it doesn't exist
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-# Store extraction results temporarily
-extraction_results = {}
+# Simple in-memory storage
+results_store = {}
 
 @app.route('/')
-def index():
-    """Main page with upload form"""
-    try:
-        # Try to render template, fallback to inline HTML if template missing
-        return render_template('index.html')
-    except Exception as e:
-        print(f"Template error: {e}, using fallback HTML")
-        return """
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>PDF Table Extractor</title>
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
-                .container { max-width: 800px; margin: 0 auto; background: rgba(255, 255, 255, 0.95); border-radius: 20px; padding: 40px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1); }
-                .header { text-align: center; margin-bottom: 40px; }
-                .header h1 { color: #333; font-size: 2.5em; margin-bottom: 10px; }
-                .form-group { margin-bottom: 25px; }
-                .form-group label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
-                .form-control { width: 100%; padding: 15px; border: 2px solid #e1e5e9; border-radius: 10px; font-size: 1em; transition: all 0.3s ease; }
-                .form-control:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
-                .btn { background: linear-gradient(45deg, #667eea, #764ba2); color: white; border: none; padding: 15px 30px; border-radius: 25px; font-size: 1.1em; font-weight: 600; cursor: pointer; transition: all 0.3s ease; width: 100%; }
-                .btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3); }
-                .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-                .alert { padding: 15px; border-radius: 10px; margin: 20px 0; display: none; }
-                .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-                .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-                .loading { text-align: center; margin: 20px 0; display: none; }
-                .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
-                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                .results { margin-top: 30px; display: none; }
-                .results h3 { color: #333; margin-bottom: 20px; }
-                .table-item { background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 4px solid #667eea; }
-                .download-btn { background: #28a745; color: white; padding: 8px 16px; border: none; border-radius: 5px; text-decoration: none; display: inline-block; margin: 5px; font-size: 0.9em; }
-                .download-btn:hover { background: #218838; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>📊 PDF Table Extractor</h1>
-                    <p>Extract tables from PDF files using AI</p>
-                </div>
-
-                <form id="uploadForm" enctype="multipart/form-data">
-                    <div class="form-group">
-                        <label for="api_key">Google AI API Key:</label>
-                        <input type="password" id="api_key" name="api_key" class="form-control" 
-                               placeholder="Enter your Google AI API key" required>
-                        <small style="color: #666; font-size: 0.9em;">
-                            Get your API key from <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a>
-                        </small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="file">PDF File:</label>
-                        <input type="file" id="file" name="file" class="form-control" 
-                               accept=".pdf" required>
-                    </div>
-
-                    <button type="submit" id="submitBtn" class="btn">
-                        Extract Tables
-                    </button>
-                </form>
-
-                <div id="loading" class="loading">
-                    <div class="spinner"></div>
-                    <p>Processing PDF... This may take a few minutes.</p>
-                </div>
-
-                <div id="error" class="alert alert-danger"></div>
-                <div id="success" class="alert alert-success"></div>
-
-                <div id="results" class="results">
-                    <h3>📋 Extraction Results</h3>
-                    <div id="resultsContent"></div>
-                </div>
+def home():
+    """Simple HTML page"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>PDF Table Extractor</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+            .form-group { margin: 20px 0; }
+            input, button { width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ddd; border-radius: 5px; }
+            button { background: #007bff; color: white; border: none; cursor: pointer; }
+            button:hover { background: #0056b3; }
+            .hidden { display: none; }
+            .alert { padding: 15px; margin: 10px 0; border-radius: 5px; }
+            .alert-success { background: #d4edda; color: #155724; }
+            .alert-error { background: #f8d7da; color: #721c24; }
+        </style>
+    </head>
+    <body>
+        <h1>📊 PDF Table Extractor</h1>
+        
+        <form id="uploadForm">
+            <div class="form-group">
+                <label>Google AI API Key:</label>
+                <input type="password" id="apiKey" placeholder="Enter your Google AI API key" required>
+                <small>Get from <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a></small>
             </div>
-
-            <script>
-                let currentExtractionId = null;
-
-                document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-                    e.preventDefault();
+            
+            <div class="form-group">
+                <label>PDF File:</label>
+                <input type="file" id="pdfFile" accept=".pdf" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">Extract Tables</button>
+        </form>
+        
+        <div id="loading" class="hidden">
+            <p>⏳ Processing PDF... Please wait...</p>
+        </div>
+        
+        <div id="message"></div>
+        <div id="results"></div>
+        
+        <script>
+            document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const apiKey = document.getElementById('apiKey').value;
+                const pdfFile = document.getElementById('pdfFile').files[0];
+                const loading = document.getElementById('loading');
+                const message = document.getElementById('message');
+                const results = document.getElementById('results');
+                const submitBtn = document.getElementById('submitBtn');
+                
+                // Reset
+                message.innerHTML = '';
+                results.innerHTML = '';
+                loading.classList.remove('hidden');
+                submitBtn.disabled = true;
+                
+                try {
+                    // Create form data
+                    const formData = new FormData();
+                    formData.append('api_key', apiKey);
+                    formData.append('file', pdfFile);
                     
-                    const formData = new FormData(this);
-                    const submitBtn = document.getElementById('submitBtn');
-                    const loading = document.getElementById('loading');
-                    const error = document.getElementById('error');
-                    const success = document.getElementById('success');
-                    const results = document.getElementById('results');
+                    // Send request
+                    const response = await fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
                     
-                    error.style.display = 'none';
-                    success.style.display = 'none';
-                    results.style.display = 'none';
+                    const text = await response.text();
+                    console.log('Response:', text);
                     
-                    submitBtn.disabled = true;
-                    loading.style.display = 'block';
-                    
-                    try {
-                        const response = await fetch('/upload', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`Server error: ${response.status}`);
-                        }
-                        
-                        const responseText = await response.text();
-                        if (!responseText.trim()) {
-                            throw new Error('Empty response from server');
-                        }
-                        
-                        const data = JSON.parse(responseText);
-                        
-                        if (data.success) {
-                            currentExtractionId = data.extraction_id;
-                            displayResults(data.results);
-                            success.innerHTML = '✅ PDF processed successfully!';
-                            success.style.display = 'block';
-                        } else {
-                            throw new Error(data.error || 'Unknown error');
-                        }
-                    } catch (err) {
-                        console.error('Error:', err);
-                        error.innerHTML = `❌ Error: ${err.message}`;
-                        error.style.display = 'block';
-                    } finally {
-                        submitBtn.disabled = false;
-                        loading.style.display = 'none';
-                    }
-                });
-
-                function displayResults(results) {
-                    const resultsContent = document.getElementById('resultsContent');
-                    const resultsDiv = document.getElementById('results');
-                    
-                    let html = `
-                        <div class="table-item">
-                            <h4>📄 ${results.pdf_name}</h4>
-                            <p><strong>Total Pages:</strong> ${results.total_pages}</p>
-                            <p><strong>Pages with Tables:</strong> ${results.pages_with_tables}</p>
-                            <p><strong>Tables Extracted:</strong> ${results.total_tables_extracted}</p>
-                        </div>
-                    `;
-                    
-                    if (results.csv_files && results.csv_files.length > 0) {
-                        html += '<div class="table-item"><h4>📥 Download Files</h4>';
-                        
-                        results.csv_files.forEach(filename => {
-                            html += `<a href="/download_csv/${currentExtractionId}/${filename}" class="download-btn">📄 ${filename}</a>`;
-                        });
-                        
-                        html += `<br><br><a href="/download/${currentExtractionId}" class="download-btn" style="background: #007bff;">📦 Download All (ZIP)</a>`;
-                        html += '</div>';
+                    if (!text.trim()) {
+                        throw new Error('Server returned empty response');
                     }
                     
-                    resultsContent.innerHTML = html;
-                    resultsDiv.style.display = 'block';
+                    const data = JSON.parse(text);
+                    
+                    if (data.success) {
+                        message.innerHTML = '<div class="alert alert-success">✅ Success! PDF processed.</div>';
+                        results.innerHTML = `
+                            <h3>Results:</h3>
+                            <p><strong>File:</strong> ${data.results.pdf_name}</p>
+                            <p><strong>Pages:</strong> ${data.results.total_pages}</p>
+                            <p><strong>Tables Found:</strong> ${data.results.total_tables_extracted}</p>
+                            ${data.results.csv_files.map(file => 
+                                `<p><a href="/download_csv/${data.extraction_id}/${file}">📄 Download ${file}</a></p>`
+                            ).join('')}
+                            <p><a href="/download/${data.extraction_id}">📦 Download All (ZIP)</a></p>
+                        `;
+                    } else {
+                        message.innerHTML = `<div class="alert alert-error">❌ Error: ${data.error}</div>`;
+                    }
+                } catch (err) {
+                    console.error('Error:', err);
+                    message.innerHTML = `<div class="alert alert-error">❌ Error: ${err.message}</div>`;
+                } finally {
+                    loading.classList.add('hidden');
+                    submitBtn.disabled = false;
                 }
-            </script>
-        </body>
-        </html>
-        """
+            });
+        </script>
+    </body>
+    </html>
+    """
 
 @app.route('/health')
-def health_check():
-    """Simple health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'Server is running'})
-
-@app.route('/test')
-def test_route():
-    """Test route to verify basic functionality"""
-    return jsonify({'success': True, 'message': 'Flask app is working correctly'})
+def health():
+    return jsonify({'status': 'ok', 'message': 'Server running'})
 
 @app.route('/upload', methods=['POST'])
-def upload_file():
-    """Handle PDF file upload and extraction"""
+def upload():
+    """Handle file upload with maximum error protection"""
     try:
-        print("=== UPLOAD REQUEST RECEIVED ===")
+        print("=== UPLOAD STARTED ===")
         
+        # Check request
+        if not request.files:
+            return jsonify({'error': 'No files in request'}), 400
+            
         if 'file' not in request.files:
-            return jsonify({'error': 'No file selected'}), 400
-        
+            return jsonify({'error': 'No file field'}), 400
+            
         file = request.files['file']
         api_key = request.form.get('api_key', '').strip()
         
-        if not file or file.filename == '':
+        print(f"File: {file.filename}")
+        print(f"API key length: {len(api_key)}")
+        
+        # Validate inputs
+        if not file or not file.filename:
             return jsonify({'error': 'No file selected'}), 400
-        
+            
         if not api_key:
-            return jsonify({'error': 'Google AI API key is required'}), 400
-        
+            return jsonify({'error': 'API key required'}), 400
+            
         if not file.filename.lower().endswith('.pdf'):
-            return jsonify({'error': 'Please upload a PDF file'}), 400
+            return jsonify({'error': 'Must be PDF file'}), 400
         
-        # Test imports
+        # Test imports safely
+        print("Testing imports...")
         try:
             import google.generativeai as genai
-            from pdf_extractor import PDFTableExtractor
+            print("✓ google.generativeai imported")
         except ImportError as e:
-            return jsonify({'error': f'Missing dependency: {str(e)}'}), 500
+            print(f"Import error: {e}")
+            return jsonify({'error': 'google-generativeai not installed'}), 500
+            
+        try:
+            import PyMuPDF as fitz
+            print("✓ PyMuPDF imported")
+        except ImportError as e:
+            print(f"Import error: {e}")
+            return jsonify({'error': 'PyMuPDF not installed'}), 500
+            
+        try:
+            import pandas as pd
+            print("✓ pandas imported")
+        except ImportError as e:
+            print(f"Import error: {e}")
+            return jsonify({'error': 'pandas not installed'}), 500
         
         # Test API key
+        print("Testing API key...")
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            # Quick test
+            test_response = model.generate_content("Hello")
+            print("✓ API key works")
         except Exception as e:
+            print(f"API error: {e}")
             return jsonify({'error': f'Invalid API key: {str(e)}'}), 400
         
-        # Process file
+        # Save file safely
+        print("Saving file...")
         extraction_id = str(uuid.uuid4())
-        filename = secure_filename(file.filename)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_filename = f"{timestamp}_{filename}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         
-        file.save(filepath)
+        # Create temp directory
+        temp_dir = tempfile.mkdtemp()
+        file_path = os.path.join(temp_dir, f"upload_{extraction_id}.pdf")
         
         try:
-            extractor = PDFTableExtractor(api_key)
-            results = extractor.process_pdf(filepath)
+            file.save(file_path)
+            file_size = os.path.getsize(file_path)
+            print(f"✓ File saved: {file_size} bytes")
+        except Exception as e:
+            return jsonify({'error': f'File save failed: {str(e)}'}), 500
+        
+        # Process PDF (simplified)
+        print("Processing PDF...")
+        try:
+            # Open PDF
+            doc = fitz.open(file_path)
+            total_pages = len(doc)
+            print(f"✓ PDF opened: {total_pages} pages")
             
-            if "error" in results:
-                return jsonify({'error': f'Processing error: {results["error"]}'}), 500
+            # Simple table extraction
+            tables_found = 0
+            csv_files = []
             
-            extraction_results[extraction_id] = {
-                'results': results,
-                'filepath': filepath,
-                'extractor': extractor,
-                'timestamp': datetime.now().isoformat()
+            for page_num in range(min(total_pages, 5)):  # Limit to 5 pages for safety
+                page = doc[page_num]
+                tables = page.find_tables()
+                
+                for i, table in enumerate(tables):
+                    try:
+                        df = table.to_pandas()
+                        if not df.empty:
+                            csv_filename = f"table_page{page_num+1}_{i+1}.csv"
+                            csv_path = os.path.join(temp_dir, csv_filename)
+                            df.to_csv(csv_path, index=False)
+                            csv_files.append(csv_path)
+                            tables_found += 1
+                            print(f"✓ Table {i+1} extracted from page {page_num+1}")
+                    except Exception as e:
+                        print(f"Table extraction error: {e}")
+                        continue
+            
+            doc.close()
+            
+            # Store results
+            results = {
+                'pdf_name': file.filename,
+                'total_pages': total_pages,
+                'pages_with_tables': len([p for p in range(total_pages) if len(doc[p].find_tables()) > 0]) if total_pages <= 5 else "Unknown",
+                'total_tables_extracted': tables_found,
+                'csv_files': csv_files,
+                'temp_dir': temp_dir
             }
             
-            # Clean up
-            try:
-                os.remove(filepath)
-            except:
-                pass
+            results_store[extraction_id] = results
             
-            response_data = {
+            print(f"✓ Processing complete: {tables_found} tables")
+            
+            return jsonify({
                 'success': True,
                 'extraction_id': extraction_id,
                 'results': {
-                    'pdf_name': results.get('pdf_name', 'Unknown'),
-                    'total_pages': results.get('total_pages', 0),
-                    'pages_with_tables': results.get('pages_with_tables', 0),
-                    'total_tables_extracted': results.get('total_tables_extracted', 0),
-                    'extracted_titles': results.get('extracted_titles', []),
-                    'csv_files': [os.path.basename(f) for f in results.get('csv_files', [])]
+                    'pdf_name': results['pdf_name'],
+                    'total_pages': results['total_pages'],
+                    'pages_with_tables': results['pages_with_tables'],
+                    'total_tables_extracted': results['total_tables_extracted'],
+                    'csv_files': [os.path.basename(f) for f in csv_files]
                 }
-            }
-            
-            return jsonify(response_data)
+            })
             
         except Exception as e:
-            try:
-                os.remove(filepath)
-            except:
-                pass
-            return jsonify({'error': f'Processing error: {str(e)}'}), 500
+            print(f"Processing error: {e}")
+            return jsonify({'error': f'PDF processing failed: {str(e)}'}), 500
         
     except Exception as e:
-        print(f"Upload error: {e}")
+        print(f"General error: {e}")
+        import traceback
         traceback.print_exc()
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 @app.route('/download/<extraction_id>')
-def download_results(extraction_id):
+def download_zip(extraction_id):
     """Download all CSV files as ZIP"""
     try:
-        if extraction_id not in extraction_results:
+        if extraction_id not in results_store:
             return jsonify({'error': 'Results not found'}), 404
         
-        extraction_data = extraction_results[extraction_id]
-        results = extraction_data['results']
+        results = results_store[extraction_id]
         
-        if not results.get('csv_files'):
-            return jsonify({'error': 'No files available'}), 404
+        if not results['csv_files']:
+            return jsonify({'error': 'No CSV files'}), 404
         
-        temp_dir = tempfile.mkdtemp()
-        zip_filename = f"{results['pdf_name']}_tables.zip"
-        zip_path = os.path.join(temp_dir, zip_filename)
+        import zipfile
+        from flask import send_file
         
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zip_path = os.path.join(results['temp_dir'], 'tables.zip')
+        
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
             for csv_file in results['csv_files']:
                 if os.path.exists(csv_file):
                     zipf.write(csv_file, os.path.basename(csv_file))
         
-        return send_file(zip_path, as_attachment=True, download_name=zip_filename)
+        return send_file(zip_path, as_attachment=True, download_name='extracted_tables.zip')
         
     except Exception as e:
         return jsonify({'error': f'Download error: {str(e)}'}), 500
 
 @app.route('/download_csv/<extraction_id>/<filename>')
-def download_single_csv(extraction_id, filename):
+def download_csv(extraction_id, filename):
     """Download single CSV file"""
     try:
-        if extraction_id not in extraction_results:
+        if extraction_id not in results_store:
             return jsonify({'error': 'Results not found'}), 404
         
-        extraction_data = extraction_results[extraction_id]
-        results = extraction_data['results']
+        results = results_store[extraction_id]
         
-        for csv_file in results.get('csv_files', []):
-            if os.path.basename(csv_file) == filename and os.path.exists(csv_file):
-                return send_file(csv_file, as_attachment=True, download_name=filename)
+        for csv_file in results['csv_files']:
+            if os.path.basename(csv_file) == filename:
+                if os.path.exists(csv_file):
+                    from flask import send_file
+                    return send_file(csv_file, as_attachment=True, download_name=filename)
         
         return jsonify({'error': 'File not found'}), 404
         
@@ -341,5 +320,5 @@ def download_single_csv(extraction_id, filename):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"Starting Flask app on port {port}")
+    print(f"🚀 Starting server on port {port}")
     app.run(debug=False, host='0.0.0.0', port=port)
