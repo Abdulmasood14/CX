@@ -32,77 +32,126 @@ def index():
 def upload_file():
     """Handle PDF file upload and extraction"""
     try:
+        print("=== UPLOAD REQUEST RECEIVED ===")
+        
         if 'file' not in request.files:
+            print("ERROR: No file in request")
             return jsonify({'error': 'No file selected'}), 400
         
         file = request.files['file']
         api_key = request.form.get('api_key', '').strip()
         
+        print(f"File: {file.filename}")
+        print(f"API Key provided: {bool(api_key)}")
+        
         if file.filename == '':
+            print("ERROR: Empty filename")
             return jsonify({'error': 'No file selected'}), 400
         
         if not api_key:
+            print("ERROR: No API key")
             return jsonify({'error': 'Google AI API key is required'}), 400
         
-        if file and file.filename.lower().endswith('.pdf'):
-            # Generate unique ID for this extraction
-            extraction_id = str(uuid.uuid4())
-            
-            # Save uploaded file
-            filename = secure_filename(file.filename)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_filename = f"{timestamp}_{filename}"
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-            file.save(filepath)
-            
-            try:
-                # Initialize extractor with provided API key
-                extractor = PDFTableExtractor(api_key)
-                
-                # Process PDF
-                results = extractor.process_pdf(filepath)
-                
-                # Store results with extraction ID
-                extraction_results[extraction_id] = {
-                    'results': results,
-                    'filepath': filepath,
-                    'extractor': extractor,
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                # Clean up uploaded file after processing
-                try:
-                    os.remove(filepath)
-                except:
-                    pass
-                
-                # Return success response with extraction ID
-                return jsonify({
-                    'success': True,
-                    'extraction_id': extraction_id,
-                    'results': {
-                        'pdf_name': results['pdf_name'],
-                        'total_pages': results['total_pages'],
-                        'pages_with_tables': results['pages_with_tables'],
-                        'total_tables_extracted': results['total_tables_extracted'],
-                        'extracted_titles': results.get('extracted_titles', []),
-                        'csv_files': [os.path.basename(f) for f in results['csv_files']]
-                    }
-                })
-                
-            except Exception as e:
-                # Clean up uploaded file on error
-                try:
-                    os.remove(filepath)
-                except:
-                    pass
-                return jsonify({'error': f'Processing error: {str(e)}'}), 500
+        if not file.filename.lower().endswith('.pdf'):
+            print("ERROR: Not a PDF file")
+            return jsonify({'error': 'Please upload a PDF file'}), 400
         
-        return jsonify({'error': 'Please upload a PDF file'}), 400
+        # Generate unique ID for this extraction
+        extraction_id = str(uuid.uuid4())
+        print(f"Extraction ID: {extraction_id}")
+        
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_filename = f"{timestamp}_{filename}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        
+        print(f"Saving file to: {filepath}")
+        file.save(filepath)
+        
+        try:
+            print("=== INITIALIZING EXTRACTOR ===")
+            # Test API key first
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                # Quick test to validate API key
+                model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                print("✓ API key validation successful")
+            except Exception as api_error:
+                print(f"API key validation failed: {api_error}")
+                return jsonify({'error': f'Invalid API key or Google AI service error: {str(api_error)}'}), 400
+            
+            # Initialize extractor with provided API key
+            from pdf_extractor import PDFTableExtractor
+            extractor = PDFTableExtractor(api_key)
+            print("✓ Extractor initialized")
+            
+            print("=== PROCESSING PDF ===")
+            # Process PDF
+            results = extractor.process_pdf(filepath)
+            print(f"✓ PDF processed, results: {type(results)}")
+            
+            if "error" in results:
+                print(f"Processing error: {results['error']}")
+                return jsonify({'error': f'Processing error: {results["error"]}'}), 500
+            
+            # Store results with extraction ID
+            extraction_results[extraction_id] = {
+                'results': results,
+                'filepath': filepath,
+                'extractor': extractor,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            print("=== CLEANING UP ===")
+            # Clean up uploaded file after processing
+            try:
+                os.remove(filepath)
+                print("✓ Temporary file cleaned up")
+            except Exception as cleanup_error:
+                print(f"Cleanup warning: {cleanup_error}")
+            
+            print("=== PREPARING RESPONSE ===")
+            # Prepare response data
+            response_data = {
+                'success': True,
+                'extraction_id': extraction_id,
+                'results': {
+                    'pdf_name': results['pdf_name'],
+                    'total_pages': results['total_pages'],
+                    'pages_with_tables': results['pages_with_tables'],
+                    'total_tables_extracted': results['total_tables_extracted'],
+                    'extracted_titles': results.get('extracted_titles', []),
+                    'csv_files': [os.path.basename(f) for f in results.get('csv_files', [])]
+                }
+            }
+            
+            print(f"✓ Response prepared: {len(str(response_data))} characters")
+            return jsonify(response_data)
+                
+        except ImportError as import_error:
+            print(f"Import error: {import_error}")
+            return jsonify({'error': f'Missing dependency: {str(import_error)}'}), 500
+            
+        except Exception as process_error:
+            print(f"Processing error: {process_error}")
+            import traceback
+            traceback.print_exc()
+            
+            # Clean up uploaded file on error
+            try:
+                os.remove(filepath)
+            except:
+                pass
+            return jsonify({'error': f'Processing error: {str(process_error)}'}), 500
         
     except Exception as e:
+        print(f"General error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'Upload error: {str(e)}'}), 500
-
+        
 @app.route('/download/<extraction_id>')
 def download_results(extraction_id):
     """Download all CSV files as a ZIP archive"""
