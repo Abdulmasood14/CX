@@ -1,5 +1,5 @@
 Flask
 google-generativeai
 pandas
-PyMuPDF
+PyMuPDF==1.23.14
 gunicorn
